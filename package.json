@@ -1,6 +1,6 @@
 {
   "name": "@bagdock/worker-sdk",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0",
   "description": "SDK for building Bagdock platform workers — lifecycle hooks, typed comms contract, webhook verification",
   "type": "module",
   "main": "src/index.ts",
