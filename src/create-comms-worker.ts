@@ -22,7 +22,7 @@ import { handleSetup, handleTeardown, handleHealth } from './create-worker'
  */
 export function createCommsWorker<
   E extends BaseEnv,
-  const C extends readonly CommsCapability[],
+  const C extends readonly CommsCapability[] = readonly CommsCapability[],
 >(config: CommsWorkerConfig<E, C>): ExportedHandler<E> {
   const allRoutes = config.routes as Record<string, RouteEntry<E>>
 
