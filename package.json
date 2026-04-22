@@ -1,0 +1,36 @@
+{
+  "name": "@bagdock/worker-sdk",
+  "version": "0.1.0-alpha.0",
+  "description": "SDK for building Bagdock platform workers — lifecycle hooks, typed comms contract, webhook verification",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./types": {
+      "types": "./src/types.ts",
+      "import": "./src/types.ts"
+    }
+  },
+  "files": ["src", "README.md", "LICENSE"],
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@cloudflare/workers-types": ">=4.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240909.0",
+    "typescript": "^5.5.0"
+  },
+  "keywords": ["bagdock", "cloudflare-workers", "worker-sdk", "comms", "adapter"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bagdock/bagdock-worker-sdk.git"
+  },
+  "homepage": "https://github.com/bagdock/bagdock-worker-sdk#readme"
+}
