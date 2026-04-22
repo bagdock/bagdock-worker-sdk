@@ -43,29 +43,34 @@ Requires `@cloudflare/workers-types` as a peer dependency.
 
 ```typescript
 import { createCommsWorker } from '@bagdock/worker-sdk'
-import type { Env } from './types'
-import { telnyxWebhookVerify } from './verify'
+import type { HandlerContext } from '@bagdock/worker-sdk'
+
+interface Env {
+  TELNYX_API_KEY: string
+  OPERATOR_CONFIG?: KVNamespace
+}
+
+async function handleSmsSend(ctx: HandlerContext<Env>): Promise<Response> {
+  const { to, body } = await ctx.request.json() as { to: string; body: string }
+  // Call your vendor's SMS API using ctx.env for secrets
+  return Response.json({ id: crypto.randomUUID(), status: 'queued' })
+}
 
 export default createCommsWorker<Env>({
-  capabilities: ['sms', 'numbers'],
+  capabilities: ['sms'],
 
   async onInstall(ctx) {
-    const sub = await createTelnyxSubAccount(ctx.operatorId, ctx.env.TELNYX_API_KEY)
-    await ctx.store.put('sub_account_id', sub.id)
-    await ctx.store.put('api_key', sub.api_key)
-    return { installation_state: { sub_account_id: sub.id } }
+    // Provision vendor resources, store per-installation state
+    await ctx.store.put('api_key', 'vendor-key-from-provisioning')
+    return { installation_state: { provisioned: true } }
   },
 
   async onUninstall(ctx) {
-    await transferNumbersToParent(ctx)
-    await suspendSubAccount(ctx)
+    // Clean up vendor resources
   },
 
   routes: {
     'sms/send': handleSmsSend,
-    'numbers/search': handleNumbersSearch,
-    'numbers/provision': handleNumbersProvision,
-    'webhooks/sms': { handler: handleSmsWebhook, verify: telnyxWebhookVerify },
   },
 })
 ```
