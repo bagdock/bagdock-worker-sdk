@@ -44,8 +44,12 @@ async function handleSetup<E extends BaseEnv>(
   const completed = await ctx.store.get('__install_completed')
   if (completed) {
     const stateJson = await ctx.store.get('__install_state')
+    // Replay connected_account too — a retry-setup after a control-plane-side
+    // persistence failure must still receive the (encrypted) credential copy.
+    const connectedJson = await ctx.store.get('__install_connected_account')
     return Response.json({
       installation_state: stateJson ? JSON.parse(stateJson) : {},
+      ...(connectedJson ? { connected_account: JSON.parse(connectedJson) } : {}),
       ...(opts?.capabilities ? { capabilities: opts.capabilities } : {}),
     })
   }
@@ -56,6 +60,12 @@ async function handleSetup<E extends BaseEnv>(
     await ctx.store.put(
       '__install_state',
       JSON.stringify(result.installation_state),
+    )
+  }
+  if (result?.connected_account) {
+    await ctx.store.put(
+      '__install_connected_account',
+      JSON.stringify(result.connected_account),
     )
   }
   await ctx.store.put('__install_completed', new Date().toISOString())
@@ -85,6 +95,7 @@ async function handleTeardown<E extends BaseEnv>(
 
   await ctx.store.delete('__install_completed')
   await ctx.store.delete('__install_state')
+  await ctx.store.delete('__install_connected_account')
 
   return Response.json(result ?? { ok: true })
 }

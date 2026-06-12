@@ -52,8 +52,29 @@ export interface Logger {
 // Lifecycle
 // ---------------------------------------------------------------------------
 
+/**
+ * Encrypted connected-account credential material returned from onInstall.
+ *
+ * The control plane persists this as a `connected_account_tokens` row and
+ * links it to the installation; the worker keeps the plaintext capability
+ * (the data key exists only as a worker secret, so this payload is opaque
+ * to the control plane). Revocation stays centralized in the uninstall path.
+ *
+ * @compliance SOC 2 CC6.1 — key never co-located with ciphertext
+ */
+export interface ConnectedAccountPayload {
+  provider: string
+  environment: 'live' | 'test'
+  /** Non-secret account reference (e.g. Stripe acct_… / sandbox id). */
+  account_ref?: string
+  /** AES-256-GCM ciphertext, base64. Key is a worker-side secret. */
+  encrypted_payload?: string
+  key_version?: number
+}
+
 export interface InstallResult {
   installation_state?: Record<string, unknown>
+  connected_account?: ConnectedAccountPayload
 }
 
 export interface TeardownResult {
@@ -313,6 +334,86 @@ export type CommsRouteMap<
   Partial<AllCommsRoutes<E>>
 
 // ---------------------------------------------------------------------------
+// Payments Capability Discriminant (RFC 0004)
+// ---------------------------------------------------------------------------
+
+export type PaymentsCapability =
+  | 'connect-onboarding'
+  | 'charges'
+  | 'subscriptions'
+  | 'direct-debit'
+  | 'payouts'
+  | 'webhooks'
+
+// ---------------------------------------------------------------------------
+// Payments Route Map (capabilities-driven)
+//
+// The route taxonomy is the PSP contract: a future PSP (Mangopay, Ryft,
+// Adyen) ships as a sibling worker declaring the capabilities it supports,
+// and the operator-api gates features off the installation's
+// `config.capabilities` — exactly how comms capabilities surface today.
+// No deeper PSP abstraction (normalized charge objects, cross-PSP webhook
+// schemas) until a second PSP forces real requirements (RFC 0004 decision 5).
+// ---------------------------------------------------------------------------
+
+export interface AllPaymentsRoutes<E extends BaseEnv = BaseEnv> {
+  'connect/account': RouteHandler<E>
+  'connect/account-link': RouteHandler<E>
+  'connect/status': RouteHandler<E>
+  'charges/create': RouteHandler<E>
+  'charges/refund': RouteHandler<E>
+  'subscriptions/create': RouteHandler<E>
+  'subscriptions/update': RouteHandler<E>
+  'subscriptions/cancel': RouteHandler<E>
+  'subscriptions/portal': RouteHandler<E>
+  'subscriptions/sync-catalog': RouteHandler<E>
+  'direct-debit/setup': RouteHandler<E>
+  'payouts/list': RouteHandler<E>
+  'payouts/schedule': RouteHandler<E>
+  'webhooks/platform': VerifiedRouteConfig<E>
+  'webhooks/connect': VerifiedRouteConfig<E>
+}
+
+type ConnectOnboardingRequired =
+  | 'connect/account'
+  | 'connect/account-link'
+  | 'connect/status'
+type ChargesRequired = 'charges/create' | 'charges/refund'
+type SubscriptionsRequired =
+  | 'subscriptions/create'
+  | 'subscriptions/update'
+  | 'subscriptions/cancel'
+  | 'subscriptions/portal'
+type DirectDebitRequired = 'direct-debit/setup'
+type PayoutsRequired = 'payouts/list' | 'payouts/schedule'
+// Webhook routes are typed VerifiedRouteConfig (not RouteHandler) — a bare
+// handler without `verify` is a compile error, never an unverified endpoint.
+type WebhooksRequired = 'webhooks/platform' | 'webhooks/connect'
+
+export type PaymentsRouteMap<
+  E extends BaseEnv,
+  C extends readonly PaymentsCapability[],
+> = ('connect-onboarding' extends C[number]
+  ? Pick<AllPaymentsRoutes<E>, ConnectOnboardingRequired>
+  : {}) &
+  ('charges' extends C[number]
+    ? Pick<AllPaymentsRoutes<E>, ChargesRequired>
+    : {}) &
+  ('subscriptions' extends C[number]
+    ? Pick<AllPaymentsRoutes<E>, SubscriptionsRequired>
+    : {}) &
+  ('direct-debit' extends C[number]
+    ? Pick<AllPaymentsRoutes<E>, DirectDebitRequired>
+    : {}) &
+  ('payouts' extends C[number]
+    ? Pick<AllPaymentsRoutes<E>, PayoutsRequired>
+    : {}) &
+  ('webhooks' extends C[number]
+    ? Pick<AllPaymentsRoutes<E>, WebhooksRequired>
+    : {}) &
+  Partial<AllPaymentsRoutes<E>>
+
+// ---------------------------------------------------------------------------
 // Worker Config
 // ---------------------------------------------------------------------------
 
@@ -334,4 +435,16 @@ export interface CommsWorkerConfig<
   onUninstall?: (ctx: HandlerContext<E>) => Promise<TeardownResult | void>
   healthCheck?: HealthCheckFn<E>
   routes: CommsRouteMap<E, C>
+}
+
+export interface PaymentsWorkerConfig<
+  E extends BaseEnv = BaseEnv,
+  C extends readonly PaymentsCapability[] = readonly PaymentsCapability[],
+> {
+  version?: string
+  capabilities: C
+  onInstall?: (ctx: HandlerContext<E>) => Promise<InstallResult | void>
+  onUninstall?: (ctx: HandlerContext<E>) => Promise<TeardownResult | void>
+  healthCheck?: HealthCheckFn<E>
+  routes: PaymentsRouteMap<E, C>
 }
