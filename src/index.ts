@@ -7,6 +7,7 @@
 
 export { createBagdockWorker } from './create-worker'
 export { createCommsWorker } from './create-comms-worker'
+export { createPaymentsWorker } from './create-payments-worker'
 export { createContext, KvInstallStore, parseDispatchHeaders } from './context'
 export { hmacSha256Verify, ed25519Verify } from './verify'
 
@@ -16,6 +17,7 @@ export type {
   InstallStore,
   Logger,
   InstallResult,
+  ConnectedAccountPayload,
   TeardownResult,
   HealthResponse,
   HealthCheckFn,
@@ -28,8 +30,12 @@ export type {
   CommsCapability,
   CommsRouteMap,
   AllCommsRoutes,
+  PaymentsCapability,
+  PaymentsRouteMap,
+  AllPaymentsRoutes,
   BagdockWorkerConfig,
   CommsWorkerConfig,
+  PaymentsWorkerConfig,
   SendSMSParams,
   SendSMSResult,
   CreateCallParams,

@@ -1,14 +1,19 @@
 /**
- * createCommsWorker — Capabilities-driven comms contract factory.
+ * createPaymentsWorker — Capabilities-driven payments contract factory.
  *
  * Extends createBagdockWorker with typed route enforcement per declared
  * capabilities. Auto-appends capabilities to the __platform/setup response.
+ *
+ * Thin generalization only (RFC 0004 decision 5): the route taxonomy in
+ * PaymentsRouteMap is the PSP contract that must stay stable for sibling
+ * PSP workers (Mangopay/Ryft/Adyen). Cross-PSP normalization is deliberately
+ * absent until a second PSP forces real requirements.
  */
 
 import type {
   BaseEnv,
-  CommsCapability,
-  CommsWorkerConfig,
+  PaymentsCapability,
+  PaymentsWorkerConfig,
   HandlerContext,
   RouteEntry,
 } from './types'
@@ -17,13 +22,13 @@ import { handleSetup, handleTeardown, handleHealth, parseJsonBody } from './crea
 
 /**
  * E first so callers can specify only the env type:
- *   createCommsWorker<Env>({ capabilities: ['sms', 'numbers'], ... })
+ *   createPaymentsWorker<Env>({ capabilities: ['charges', 'webhooks'], ... })
  * C is inferred from the capabilities literal via const type parameter.
  */
-export function createCommsWorker<
+export function createPaymentsWorker<
   E extends BaseEnv,
-  const C extends readonly CommsCapability[] = readonly CommsCapability[],
->(config: CommsWorkerConfig<E, C>): ExportedHandler<E> {
+  const C extends readonly PaymentsCapability[] = readonly PaymentsCapability[],
+>(config: PaymentsWorkerConfig<E, C>): ExportedHandler<E> {
   const allRoutes = config.routes as Record<string, RouteEntry<E>>
 
   return {
@@ -110,9 +115,9 @@ export function createCommsWorker<
 
         return await (route as (ctx: HandlerContext<E>) => Promise<Response>)(ctx)
       } catch (err: unknown) {
-        // Full error stays in logs only — vendor errors can carry internal
-        // detail that must not reach callers.
-        console.error(`[worker-sdk/comms] ${path} error:`, err)
+        // Full error stays in logs only — PSP errors can carry internal
+        // detail (account ids, endpoints) that must not reach callers.
+        console.error(`[worker-sdk/payments] ${path} error:`, err)
         return Response.json(
           { error: 'Internal error', path },
           {

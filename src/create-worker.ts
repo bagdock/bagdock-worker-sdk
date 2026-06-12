@@ -28,6 +28,19 @@ function isVerifiedRoute<E extends BaseEnv>(
   return typeof entry === 'object' && 'handler' in entry && 'verify' in entry
 }
 
+/**
+ * Parse a lifecycle-route JSON body. Malformed JSON is a caller error (400),
+ * not a worker failure (500) — a 500 makes the platform retry a request that
+ * can never succeed.
+ */
+export async function parseJsonBody<T>(request: Request): Promise<T | Response> {
+  try {
+    return (await request.json()) as T
+  } catch {
+    return Response.json({ error: 'Invalid JSON body' }, { status: 400 })
+  }
+}
+
 interface SetupOptions {
   capabilities?: readonly string[]
 }
@@ -44,8 +57,12 @@ async function handleSetup<E extends BaseEnv>(
   const completed = await ctx.store.get('__install_completed')
   if (completed) {
     const stateJson = await ctx.store.get('__install_state')
+    // Replay connected_account too — a retry-setup after a control-plane-side
+    // persistence failure must still receive the (encrypted) credential copy.
+    const connectedJson = await ctx.store.get('__install_connected_account')
     return Response.json({
       installation_state: stateJson ? JSON.parse(stateJson) : {},
+      ...(connectedJson ? { connected_account: JSON.parse(connectedJson) } : {}),
       ...(opts?.capabilities ? { capabilities: opts.capabilities } : {}),
     })
   }
@@ -56,6 +73,12 @@ async function handleSetup<E extends BaseEnv>(
     await ctx.store.put(
       '__install_state',
       JSON.stringify(result.installation_state),
+    )
+  }
+  if (result?.connected_account) {
+    await ctx.store.put(
+      '__install_connected_account',
+      JSON.stringify(result.connected_account),
     )
   }
   await ctx.store.put('__install_completed', new Date().toISOString())
@@ -81,10 +104,15 @@ async function handleTeardown<E extends BaseEnv>(
 
   await ctx.store.put('__uninstall_started', new Date().toISOString())
   const result = await onUninstall(ctx)
-  await ctx.store.put('__uninstall_completed', new Date().toISOString())
 
   await ctx.store.delete('__install_completed')
   await ctx.store.delete('__install_state')
+  await ctx.store.delete('__install_connected_account')
+
+  // Completed flag goes LAST: if any cleanup delete above fails, the retry
+  // must not short-circuit on the flag and skip cleanup forever. onUninstall
+  // hooks are store-guarded, so a re-run after partial cleanup is safe.
+  await ctx.store.put('__uninstall_completed', new Date().toISOString())
 
   return Response.json(result ?? { ok: true })
 }
@@ -138,11 +166,12 @@ export function createBagdockWorker<E extends BaseEnv>(
 
       try {
         if (path === '__platform/setup' && request.method === 'POST') {
-          const body = (await request.json()) as {
+          const body = await parseJsonBody<{
             operator_id: string
             installation_id: string
             environment: string
-          }
+          }>(request)
+          if (body instanceof Response) return body
           const ctx = createContext(request, env, {
             operatorId: body.operator_id,
             installationId: body.installation_id,
@@ -154,10 +183,11 @@ export function createBagdockWorker<E extends BaseEnv>(
         }
 
         if (path === '__platform/teardown' && request.method === 'POST') {
-          const body = (await request.json()) as {
+          const body = await parseJsonBody<{
             operator_id: string
             installation_id: string
-          }
+          }>(request)
+          if (body instanceof Response) return body
           const ctx = createContext(request, env, {
             operatorId: body.operator_id,
             installationId: body.installation_id,
@@ -202,10 +232,11 @@ export function createBagdockWorker<E extends BaseEnv>(
 
         return await route(ctx)
       } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : 'Internal error'
+        // Full error stays in logs only — vendor/library messages can carry
+        // internal detail (account ids, endpoints) that must not reach callers.
         console.error(`[worker-sdk] ${path} error:`, err)
         return Response.json(
-          { error: message, path },
+          { error: 'Internal error', path },
           {
             status: 500,
             headers: { 'X-Response-Time-Ms': String(Date.now() - startMs) },
