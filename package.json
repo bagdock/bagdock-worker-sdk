@@ -15,7 +15,11 @@
       "import": "./src/types.ts"
     }
   },
-  "files": ["src", "README.md", "LICENSE"],
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
@@ -26,11 +30,17 @@
     "@cloudflare/workers-types": "^4.20240909.0",
     "typescript": "^5.5.0"
   },
-  "keywords": ["bagdock", "cloudflare-workers", "worker-sdk", "comms", "adapter"],
+  "keywords": [
+    "bagdock",
+    "cloudflare-workers",
+    "worker-sdk",
+    "comms",
+    "adapter"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/bagdock/bagdock-worker-sdk.git"
+    "url": "git+https://github.com/bagdock/bagdock-worker-sdk.git"
   },
   "homepage": "https://github.com/bagdock/bagdock-worker-sdk#readme"
 }

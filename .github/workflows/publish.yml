@@ -18,7 +18,9 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
-          registry-url: https://registry.npmjs.org
-      - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # Trusted Publishing (OIDC) — same pattern as the other @bagdock
+      # packages. No NPM_TOKEN: npm 11.5+ exchanges the Actions OIDC token
+      # directly. registry-url is omitted on purpose: setup-node would write
+      # an .npmrc expecting NODE_AUTH_TOKEN, and an empty token fails auth
+      # before OIDC is attempted (the v0.2.0 ENEEDAUTH failure).
+      - run: npx npm@latest publish --provenance --access public
