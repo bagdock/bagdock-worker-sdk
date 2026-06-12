@@ -53,24 +53,40 @@ export interface Logger {
 // ---------------------------------------------------------------------------
 
 /**
- * Encrypted connected-account credential material returned from onInstall.
+ * Connected-account material returned from onInstall.
  *
  * The control plane persists this as a `connected_account_tokens` row and
  * links it to the installation; the worker keeps the plaintext capability
  * (the data key exists only as a worker secret, so this payload is opaque
  * to the control plane). Revocation stays centralized in the uninstall path.
  *
+ * Two valid shapes, enforced by the union:
+ * - credential-carrying: `encrypted_payload` MUST be versioned via
+ *   `key_version` — an unversioned ciphertext cannot be rotated.
+ * - reference-only: nothing secret to store (e.g. a live Connect acct_…
+ *   operated via the platform key); `account_ref` is then required so the
+ *   row still anchors revocation.
+ *
  * @compliance SOC 2 CC6.1 — key never co-located with ciphertext
  */
-export interface ConnectedAccountPayload {
+interface ConnectedAccountBase {
   provider: string
   environment: 'live' | 'test'
-  /** Non-secret account reference (e.g. Stripe acct_… / sandbox id). */
-  account_ref?: string
-  /** AES-256-GCM ciphertext, base64. Key is a worker-side secret. */
-  encrypted_payload?: string
-  key_version?: number
 }
+
+export type ConnectedAccountPayload =
+  | (ConnectedAccountBase & {
+      /** Non-secret account reference (e.g. Stripe acct_… / sandbox id). */
+      account_ref: string
+      encrypted_payload?: never
+      key_version?: never
+    })
+  | (ConnectedAccountBase & {
+      account_ref?: string
+      /** AES-256-GCM ciphertext, base64. Key is a worker-side secret. */
+      encrypted_payload: string
+      key_version: number
+    })
 
 export interface InstallResult {
   installation_state?: Record<string, unknown>

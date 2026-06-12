@@ -18,7 +18,7 @@ import type {
   RouteEntry,
 } from './types'
 import { createContext } from './context'
-import { handleSetup, handleTeardown, handleHealth } from './create-worker'
+import { handleSetup, handleTeardown, handleHealth, parseJsonBody } from './create-worker'
 
 /**
  * E first so callers can specify only the env type:
@@ -39,11 +39,12 @@ export function createPaymentsWorker<
 
       try {
         if (path === '__platform/setup' && request.method === 'POST') {
-          const body = (await request.json()) as {
+          const body = await parseJsonBody<{
             operator_id: string
             installation_id: string
             environment: string
-          }
+          }>(request)
+          if (body instanceof Response) return body
           const ctx = createContext(request, env, {
             operatorId: body.operator_id,
             installationId: body.installation_id,
@@ -57,10 +58,11 @@ export function createPaymentsWorker<
         }
 
         if (path === '__platform/teardown' && request.method === 'POST') {
-          const body = (await request.json()) as {
+          const body = await parseJsonBody<{
             operator_id: string
             installation_id: string
-          }
+          }>(request)
+          if (body instanceof Response) return body
           const ctx = createContext(request, env, {
             operatorId: body.operator_id,
             installationId: body.installation_id,
@@ -113,10 +115,11 @@ export function createPaymentsWorker<
 
         return await (route as (ctx: HandlerContext<E>) => Promise<Response>)(ctx)
       } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : 'Internal error'
+        // Full error stays in logs only — PSP errors can carry internal
+        // detail (account ids, endpoints) that must not reach callers.
         console.error(`[worker-sdk/payments] ${path} error:`, err)
         return Response.json(
-          { error: message, path },
+          { error: 'Internal error', path },
           {
             status: 500,
             headers: { 'X-Response-Time-Ms': String(Date.now() - startMs) },
