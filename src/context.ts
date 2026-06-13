@@ -8,6 +8,7 @@ import type {
   InstallStore,
   Logger,
 } from './types'
+import { createCredentialsProvider } from './credentials'
 
 const DISPATCH_HEADERS = {
   operatorId: 'x-bagdock-operator-id',
@@ -101,6 +102,7 @@ export function createContext<E extends BaseEnv>(
     environment,
     env,
     store,
+    credentials: createCredentialsProvider(),
     logger: createLogger(operatorId, installationId),
     request,
     idempotencyKey: installationId,

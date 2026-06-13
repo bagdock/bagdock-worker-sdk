@@ -15,6 +15,7 @@ import type {
   VerifiedRouteConfig,
 } from './types'
 import { createContext } from './context'
+import { isPreparedCredential } from './credentials'
 
 const START_TIME = Date.now()
 
@@ -68,6 +69,20 @@ async function handleSetup<E extends BaseEnv>(
   }
 
   const result = await onInstall(ctx)
+
+  // Runtime backstop for the credential-carrying contract (BDOK-557 scope 4): a
+  // credential-bearing install must hand over a PreparedCredential (built by
+  // ctx.credentials.store) so the platform can seal it on ingest. An `as`-cast
+  // that put a bare secret on `credential` throws here, never reaching the
+  // control plane as an unmanaged value.
+  if (result?.connected_account && 'credential' in result.connected_account) {
+    if (!isPreparedCredential(result.connected_account.credential)) {
+      throw new Error(
+        'connected_account.credential must come from ctx.credentials.store() — ' +
+          'raw secrets are sealed by the platform, not the worker',
+      )
+    }
+  }
 
   if (result?.installation_state) {
     await ctx.store.put(

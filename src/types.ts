@@ -4,6 +4,8 @@
  * @compliance SOC 2 CC6.1 | ISO 27001 A.8.1
  */
 
+import type { CredentialsProvider, PreparedCredential } from './credentials'
+
 // ---------------------------------------------------------------------------
 // Worker Environment
 // ---------------------------------------------------------------------------
@@ -24,6 +26,13 @@ export interface HandlerContext<E extends BaseEnv = BaseEnv> {
   environment: 'live' | 'test'
   env: E
   store: InstallStore
+  /**
+   * Platform credential surface. An adapter declares a per-operator secret to
+   * store; the platform seals it server-side. The only sanctioned way to build
+   * the credential-carrying `ConnectedAccountPayload`. Adapters never touch
+   * crypto, a KMS, or `CREDENTIAL_ENCRYPTION_KEY` (BDOK-557).
+   */
+  credentials: CredentialsProvider
   logger: Logger
   request: Request
   /**
@@ -61,8 +70,12 @@ export interface Logger {
  * to the control plane). Revocation stays centralized in the uninstall path.
  *
  * Two valid shapes, enforced by the union:
- * - credential-carrying: `encrypted_payload` MUST be versioned via
- *   `key_version` — an unversioned ciphertext cannot be rotated.
+ * - credential-carrying: `credential` MUST be a `PreparedCredential` produced by
+ *   `ctx.credentials.store()`. The worker hands over the RAW payload (it holds no
+ *   key); the platform seals it server-side on ingest before it touches the DB.
+ *   There is deliberately no `encrypted_payload` field here — a worker cannot
+ *   express a sealed value, so the only producer of ciphertext is the platform
+ *   (BDOK-557 scope 4: sealing is a platform guarantee, not a vendor task).
  * - reference-only: nothing secret to store (e.g. a live Connect acct_…
  *   operated via the platform key); `account_ref` is then required so the
  *   row still anchors revocation.
@@ -78,14 +91,12 @@ export type ConnectedAccountPayload =
   | (ConnectedAccountBase & {
       /** Non-secret account reference (e.g. Stripe acct_… / sandbox id). */
       account_ref: string
-      encrypted_payload?: never
-      key_version?: never
+      credential?: never
     })
   | (ConnectedAccountBase & {
       account_ref?: string
-      /** AES-256-GCM ciphertext, base64. Key is a worker-side secret. */
-      encrypted_payload: string
-      key_version: number
+      /** Raw credential handed to the platform to seal (see `ctx.credentials.store`). */
+      credential: PreparedCredential
     })
 
 export interface InstallResult {

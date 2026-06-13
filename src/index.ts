@@ -10,6 +10,7 @@ export { createCommsWorker } from './create-comms-worker'
 export { createPaymentsWorker } from './create-payments-worker'
 export { createContext, KvInstallStore, parseDispatchHeaders } from './context'
 export { hmacSha256Verify, ed25519Verify } from './verify'
+export { createCredentialsProvider, isPreparedCredential } from './credentials'
 
 export type {
   BaseEnv,
@@ -49,3 +50,9 @@ export type {
   ProvisionNumberResult,
   ReleaseNumberResult,
 } from './types'
+
+export type {
+  PreparedCredential,
+  CredentialsProvider,
+  CredentialAadContext,
+} from './credentials'
