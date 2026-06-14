@@ -14,7 +14,33 @@ const DISPATCH_HEADERS = {
   operatorId: 'x-bagdock-operator-id',
   installationId: 'x-bagdock-installation-id',
   environment: 'x-bagdock-environment',
+  /** Resolved install inputs (base64 JSON), attached by the platform when the
+   *  adapter declares `inputs`. See `ctx.inputs` (BDOK-561). */
+  installInputs: 'x-bagdock-install-inputs',
 } as const
+
+/**
+ * Decode the per-request install-inputs header into `ctx.inputs`. The platform
+ * resolves + unseals server-side and sends a base64-encoded JSON object of
+ * string values. Tolerant by design: absent or malformed → `{}` (never throws),
+ * so a bad header degrades to "no inputs" rather than 500-ing the dispatch.
+ */
+function parseInstallInputsHeader(request: Request): Record<string, string> {
+  const raw = request.headers.get(DISPATCH_HEADERS.installInputs)
+  if (!raw) return {}
+  try {
+    const bytes = Uint8Array.from(atob(raw), (ch) => ch.charCodeAt(0))
+    const parsed = JSON.parse(new TextDecoder().decode(bytes)) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    const out: Record<string, string> = {}
+    for (const [k, v] of Object.entries(parsed)) {
+      if (typeof v === 'string') out[k] = v
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
 
 export function parseDispatchHeaders(request: Request): {
   operatorId: string
@@ -82,6 +108,9 @@ export function createContext<E extends BaseEnv>(
     operatorId?: string
     installationId?: string
     environment?: 'live' | 'test'
+    /** Lifecycle routes supply inputs from the request body (the dispatch
+     *  header is absent on `__platform/setup`); dispatch routes read the header. */
+    inputs?: Record<string, string>
   },
 ): HandlerContext<E> | null {
   const headers = parseDispatchHeaders(request)
@@ -103,6 +132,7 @@ export function createContext<E extends BaseEnv>(
     env,
     store,
     credentials: createCredentialsProvider(),
+    inputs: overrides?.inputs ?? parseInstallInputsHeader(request),
     logger: createLogger(operatorId, installationId),
     request,
     idempotencyKey: installationId,

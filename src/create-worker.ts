@@ -185,12 +185,16 @@ export function createBagdockWorker<E extends BaseEnv>(
             operator_id: string
             installation_id: string
             environment: string
+            input_values?: Record<string, string>
           }>(request)
           if (body instanceof Response) return body
           const ctx = createContext(request, env, {
             operatorId: body.operator_id,
             installationId: body.installation_id,
             environment: body.environment as 'live' | 'test',
+            // Setup has no dispatch header; install inputs (if any) arrive in the
+            // body (BDOK-560 sends `input_values`). Exposed on `ctx.inputs`.
+            inputs: body.input_values ?? {},
           })
           if (!ctx)
             return Response.json({ error: 'Missing context' }, { status: 400 })

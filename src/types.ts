@@ -33,6 +33,18 @@ export interface HandlerContext<E extends BaseEnv = BaseEnv> {
    * crypto, a KMS, or `CREDENTIAL_ENCRYPTION_KEY` (BDOK-557).
    */
   credentials: CredentialsProvider
+  /**
+   * Operator-submitted install inputs for THIS installation, resolved and
+   * delivered by the platform per-request (BDOK-561). The platform reads the
+   * adapter's declared `inputs`, pulls `text` values from installation config
+   * and UNSEALS `password` values server-side, then hands the merged plaintext
+   * map over the trusted dispatch channel. Keys match the manifest `inputs[].key`.
+   *
+   * May contain unsealed secrets — treat as sensitive. Ephemeral: the SDK never
+   * persists it. Empty `{}` when the adapter declares no inputs or none are set.
+   * Unsealing stays entirely server-side; the SDK performs no crypto (BDOK-557).
+   */
+  inputs: Record<string, string>
   logger: Logger
   request: Request
   /**

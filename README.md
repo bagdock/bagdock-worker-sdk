@@ -86,6 +86,35 @@ export default createCommsWorker<Env>({
 | **Webhooks** | Adapter-local `VerifyFunction` | Clone-based body handoff, structured 401/500 error responses |
 | **Errors** | Nothing | Structured JSON errors with timing headers, global error boundary |
 
+## Install inputs (`ctx.inputs`)
+
+An adapter can declare operator-supplied install inputs in `bagdock.json`, e.g. a
+bring-your-own-API-key field:
+
+```json
+"inputs": [
+  { "key": "telnyx_api_key", "label": "Telnyx API Key", "type": "password", "required": false,
+    "help": "Bring your own Telnyx account. Leave blank to use the managed integration." }
+]
+```
+
+The operator submits values in the dashboard Connect step. The **platform** resolves
+them per-request — reading `text` values from installation config and **unsealing**
+`password` values server-side — and delivers the merged plaintext map. Read it from
+`ctx.inputs` (keys match `inputs[].key`):
+
+```ts
+async function handleSmsSend(ctx: HandlerContext<Env>): Promise<Response> {
+  // BYOK: prefer the operator's own key when present; else the managed key.
+  const apiKey = ctx.inputs.telnyx_api_key || ctx.env.TELNYX_API_KEY
+  // ...
+}
+```
+
+`ctx.inputs` is `{}` when the adapter declares no inputs or none are set. It may
+carry unsealed secrets — treat as sensitive and never persist it. Sealing/unsealing
+stays entirely server-side; the SDK performs no crypto.
+
 ## Webhook verification
 
 The SDK is **vendor-agnostic** — it knows nothing about Telnyx, Stripe, Shopify, or any other vendor. Webhook verification follows the same pattern every major platform uses: the vendor who signs the webhook publishes the SDK that verifies it.
@@ -156,7 +185,7 @@ Both `hmacSha256Verify` and `ed25519Verify` handle null signatures, timestamp sk
 
 | Type | Description |
 |------|-------------|
-| `HandlerContext<E>` | Unified context for all handlers — operator ID, installation ID, env, store, logger |
+| `HandlerContext<E>` | Unified context for all handlers — operator ID, installation ID, env, store, inputs, logger |
 | `VerifyFunction<E>` | Webhook verification contract — `(request, env, rawBody) => Promise<true \| Response>` |
 | `CommsCapability` | `'sms' \| 'voice' \| 'numbers'` |
 | `InstallStore` | Per-installation encrypted state bag (KV-backed) |
