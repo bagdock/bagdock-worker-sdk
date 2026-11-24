@@ -1,0 +1,41 @@
+# SYNC-OWNED: source of truth is bagdock/bagdock (monorepo),
+# scripts/mirror/scaffold/.github/workflows/guardrail-author-check.yml. This is a
+# shared guardrail synced into every generated mirror; do not edit on the mirror.
+#
+# Purpose: make drift visible. Fails if the most recent push to main was not
+# authored by the sync App bot (the shared bagdock-mirror-sync GitHub App,
+# expected author name ending in "[bot]").
+
+name: Guardrail - author check
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check-author:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Verify last commit author is the sync App
+        run: |
+          author="$(git log -1 --pretty=format:'%an')"
+          echo "Last commit author: $author"
+          case "$author" in
+            *"[bot]")
+              echo "OK: last commit authored by a bot account."
+              ;;
+            *)
+              echo "FAIL: last commit on main was not authored by the sync App."
+              echo "This repo is a generated one-way mirror. Direct commits to main are not expected."
+              echo "See docs/mirror-inversion-runbook.md in bagdock/bagdock for the recovery steps."
+              exit 1
+              ;;
+          esac

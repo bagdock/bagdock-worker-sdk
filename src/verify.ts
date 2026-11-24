@@ -2,7 +2,7 @@
  * Webhook verification primitives.
  *
  * Cryptographic building blocks for webhook signature verification —
- * vendor-agnostic, constant-time, with timestamp-skew handling.
+ * vendor-agnostic, constant-time, with a fail-closed timestamp window.
  *
  * Most adapters should use their vendor's own SDK for verification
  * (e.g. `telnyx.webhooks.constructEvent()`, `@shopify/shopify-api`,
@@ -23,10 +23,12 @@ const DEFAULT_TOLERANCE_MS = 5 * 60 * 1000
 
 /**
  * Verify an HMAC-SHA256 signature with constant-time comparison
- * and optional timestamp tolerance.
+ * and a timestamp tolerance window.
  *
  * **Return semantics:** Never throws. `signature` is `null` → 401 Response.
- * Invalid/expired timestamp → 401. Signature mismatch (constant-time) → 401.
+ * Missing, invalid or expired timestamp → 401 (pass `requireTimestamp: false`
+ * only for a vendor that signs without one). Signature mismatch
+ * (constant-time) → 401.
  * All checks pass → `true`. Callers can safely pass `headers.get(...)`
  * (returns `string | null`) without pre-checking.
  *
@@ -39,14 +41,15 @@ const DEFAULT_TOLERANCE_MS = 5 * 60 * 1000
  *   hmacSha256Verify({
  *     signature: req.headers.get('x-vendor-sig'),
  *     secret: env.VENDOR_SECRET,
- *     signingString: body,
+ *     signingString: `${req.headers.get('x-vendor-timestamp')}.${body}`,
+ *     timestamp: req.headers.get('x-vendor-timestamp'),
  *   })
  * ```
  */
 export async function hmacSha256Verify(
   opts: HmacSha256VerifyOptions,
 ): Promise<true | Response> {
-  const { signature, secret, signingString, toleranceMs, timestamp } = opts
+  const { signature, secret, signingString } = opts
 
   if (!signature) {
     return Response.json(
@@ -55,24 +58,8 @@ export async function hmacSha256Verify(
     )
   }
 
-  if (timestamp !== undefined) {
-    const tolerance = toleranceMs ?? DEFAULT_TOLERANCE_MS
-    const ts =
-      typeof timestamp === 'string' ? parseInt(timestamp, 10) : null
-    if (ts === null || isNaN(ts)) {
-      return Response.json(
-        { error: 'Invalid webhook timestamp' },
-        { status: 401 },
-      )
-    }
-    const now = Math.floor(Date.now() / 1000)
-    if (Math.abs(now - ts) * 1000 > tolerance) {
-      return Response.json(
-        { error: 'Webhook timestamp expired' },
-        { status: 401 },
-      )
-    }
-  }
+  const timestampFailure = checkTimestamp(opts)
+  if (timestampFailure) return timestampFailure
 
   const encoder = new TextEncoder()
   const key = await crypto.subtle.importKey(
@@ -119,10 +106,11 @@ export async function hmacSha256Verify(
 // ---------------------------------------------------------------------------
 
 /**
- * Verify an Ed25519 signature with optional timestamp tolerance.
+ * Verify an Ed25519 signature with a timestamp tolerance window.
  *
  * **Return semantics:** Never throws. `signature` is `null` → 401 Response.
- * Invalid/expired timestamp → 401. Signature invalid or crypto failure →
+ * Missing, invalid or expired timestamp → 401 (pass `requireTimestamp: false`
+ * only for a vendor that signs without one). Signature invalid or crypto failure →
  * 401 (logged to console). All checks pass → `true`.
  *
  * Usage (adapter-local verifier wrapping the primitive):
@@ -135,13 +123,14 @@ export async function hmacSha256Verify(
  *     signature: req.headers.get('x-sig-ed25519'),
  *     publicKey: env.VENDOR_PUBLIC_KEY,
  *     signingString: `${req.headers.get('x-timestamp')}|${body}`,
+ *     timestamp: req.headers.get('x-timestamp'),
  *   })
  * ```
  */
 export async function ed25519Verify(
   opts: Ed25519VerifyOptions,
 ): Promise<true | Response> {
-  const { signature, publicKey, signingString, toleranceMs, timestamp } = opts
+  const { signature, publicKey, signingString } = opts
 
   if (!signature) {
     return Response.json(
@@ -150,23 +139,8 @@ export async function ed25519Verify(
     )
   }
 
-  if (timestamp !== undefined && timestamp !== null) {
-    const tolerance = toleranceMs ?? DEFAULT_TOLERANCE_MS
-    const ts = parseInt(timestamp, 10)
-    if (isNaN(ts)) {
-      return Response.json(
-        { error: 'Invalid webhook timestamp' },
-        { status: 401 },
-      )
-    }
-    const now = Math.floor(Date.now() / 1000)
-    if (Math.abs(now - ts) * 1000 > tolerance) {
-      return Response.json(
-        { error: 'Webhook timestamp expired' },
-        { status: 401 },
-      )
-    }
-  }
+  const timestampFailure = checkTimestamp(opts)
+  if (timestampFailure) return timestampFailure
 
   try {
     const pubKeyBytes = base64ToArrayBuffer(publicKey)
@@ -209,6 +183,44 @@ export async function ed25519Verify(
 // ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
+
+/**
+ * Replay-window check shared by both primitives. Fails closed: a missing
+ * (`undefined`, `null` or empty) timestamp is a 401 unless the caller set
+ * `requireTimestamp: false` for a vendor that signs without one. A timestamp
+ * that is present is always checked, whatever `requireTimestamp` says.
+ * Returns the 401 Response on failure, `null` when the request may proceed.
+ */
+function checkTimestamp(
+  opts: Pick<HmacSha256VerifyOptions, 'timestamp' | 'toleranceMs' | 'requireTimestamp'>,
+): Response | null {
+  const { timestamp, toleranceMs, requireTimestamp } = opts
+
+  if (timestamp === undefined || timestamp === null || timestamp === '') {
+    if (requireTimestamp === false) return null
+    return Response.json(
+      { error: 'Missing webhook timestamp' },
+      { status: 401 },
+    )
+  }
+
+  if (!/^\d+$/.test(timestamp)) {
+    return Response.json(
+      { error: 'Invalid webhook timestamp' },
+      { status: 401 },
+    )
+  }
+  const ts = Number(timestamp)
+  const tolerance = toleranceMs ?? DEFAULT_TOLERANCE_MS
+  const now = Math.floor(Date.now() / 1000)
+  if (Math.abs(now - ts) * 1000 > tolerance) {
+    return Response.json(
+      { error: 'Webhook timestamp expired' },
+      { status: 401 },
+    )
+  }
+  return null
+}
 
 function base64ToArrayBuffer(base64: string): ArrayBuffer {
   const bin = atob(base64)

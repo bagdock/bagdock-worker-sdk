@@ -16,8 +16,17 @@ import type {
 } from './types'
 import { createContext } from './context'
 import { isPreparedCredential } from './credentials'
+import { verifyPlatformRequest, platformAuthError } from './platform-auth'
 
 const START_TIME = Date.now()
+
+/**
+ * Worker secret holding this worker's platform signing key, derived by the
+ * operator API from its `ADAPTER_PLATFORM_DISPATCH_SECRET` and installed at
+ * deploy. Absent, the lifecycle routes and every plain route answer 401
+ * `unconfigured` (BDOK-1277, BDOK-1701).
+ */
+export const PLATFORM_SECRET_BINDING = 'BAGDOCK_PLATFORM_SECRET'
 
 let healthCache: { result: { status: 'healthy' | 'degraded' | 'down'; reason?: string }; expiresAt: number } | null = null
 let healthInflight: Promise<{ status: 'healthy' | 'degraded' | 'down'; reason?: string }> | null = null
@@ -30,16 +39,107 @@ function isVerifiedRoute<E extends BaseEnv>(
 }
 
 /**
- * Parse a lifecycle-route JSON body. Malformed JSON is a caller error (400),
- * not a worker failure (500) — a 500 makes the platform retry a request that
- * can never succeed.
+ * Read the body and verify the platform's signature over it. Returns the raw
+ * body, or the 401 to send. Lifecycle and plain routes share it, so the two
+ * cannot drift apart on the same trust boundary.
  */
-export async function parseJsonBody<T>(request: Request): Promise<T | Response> {
+async function authenticatePlatformCall(
+  request: Request,
+  env: BaseEnv,
+  route: string,
+): Promise<string | Response> {
+  const rawBody = await request.text()
+  const auth = await verifyPlatformRequest(
+    request,
+    env[PLATFORM_SECRET_BINDING] as string | undefined,
+    rawBody,
+  )
+  if (!auth.ok) {
+    console.warn(`[platform-auth] rejected ${route}: ${auth.reason}`)
+    return platformAuthError(auth.reason)
+  }
+  return rawBody
+}
+
+/**
+ * Read, authenticate and parse a `__platform/*` lifecycle body (BDOK-1277).
+ *
+ * These two routes act on the `operator_id` and `installation_id` in their
+ * body, so the body has to be attributable to the platform before a hook runs.
+ * The raw text is read once and handed to the verifier, because the signature
+ * covers the exact bytes sent — re-serialising the parsed object would change
+ * key order and spacing and never match.
+ *
+ * When `BAGDOCK_PLATFORM_SECRET` is not set on the worker the call is refused
+ * with 401 `unconfigured`. Accepting it, as before 0.6.0, left teardown open to
+ * any caller on an adapter deployed without its secret (BDOK-1701).
+ */
+export async function readLifecycleBody<T>(
+  request: Request,
+  env: BaseEnv,
+  route: string,
+): Promise<T | Response> {
+  const rawBody = await authenticatePlatformCall(request, env, route)
+  if (rawBody instanceof Response) return rawBody
+
   try {
-    return (await request.json()) as T
+    return JSON.parse(rawBody) as T
   } catch {
     return Response.json({ error: 'Invalid JSON body' }, { status: 400 })
   }
+}
+
+/**
+ * Run a non-lifecycle route: the shared tail of every worker factory.
+ *
+ * A route that declares `verify` is a vendor webhook; its own verifier
+ * authenticates it. Every other route is a platform call, and its context comes
+ * from the dispatch headers, whose installation id picks whose stored vendor
+ * credentials the handler uses. So a plain route runs only when the platform's
+ * signature over the exact body verifies against `BAGDOCK_PLATFORM_SECRET`
+ * (BDOK-1701). Authentication comes before the header check, so an
+ * unauthenticated caller learns nothing about the context a route expects.
+ *
+ * The handler receives a clone with the body unread, as verified routes do.
+ */
+export async function dispatchRoute<E extends BaseEnv>(
+  route: RouteEntry<E>,
+  request: Request,
+  env: E,
+  path: string,
+): Promise<Response> {
+  if (isVerifiedRoute(route)) {
+    const clone = request.clone()
+    const rawBody = await request.text()
+
+    // The vendor signature is checked first: a direct vendor delivery carries
+    // no dispatch headers, so reading them first answered 400 before the
+    // verifier ran (BDOK-568).
+    const result = await route.verify(clone, env, rawBody)
+    if (result !== true) return result
+
+    const ctx = createContext(clone, env, { accountLevel: true })
+    if (!ctx) {
+      return Response.json(
+        { error: 'Missing dispatch headers' },
+        { status: 400 },
+      )
+    }
+    return await route.handler({ ...ctx, request: clone })
+  }
+
+  const clone = request.clone()
+  const auth = await authenticatePlatformCall(request, env, path)
+  if (auth instanceof Response) return auth
+
+  const ctx = createContext(clone, env)
+  if (!ctx) {
+    return Response.json(
+      { error: 'Missing dispatch headers' },
+      { status: 400 },
+    )
+  }
+  return await route(ctx)
 }
 
 interface SetupOptions {
@@ -51,8 +151,13 @@ async function handleSetup<E extends BaseEnv>(
   onInstall: BagdockWorkerConfig<E>['onInstall'],
   opts?: SetupOptions,
 ): Promise<Response> {
+  const capabilities = opts?.capabilities ? { capabilities: opts.capabilities } : {}
+
   if (!onInstall) {
-    return Response.json({ installation_state: {} })
+    return Response.json({
+      installation_state: {},
+      ...capabilities,
+    })
   }
 
   const completed = await ctx.store.get('__install_completed')
@@ -64,7 +169,7 @@ async function handleSetup<E extends BaseEnv>(
     return Response.json({
       installation_state: stateJson ? JSON.parse(stateJson) : {},
       ...(connectedJson ? { connected_account: JSON.parse(connectedJson) } : {}),
-      ...(opts?.capabilities ? { capabilities: opts.capabilities } : {}),
+      ...capabilities,
     })
   }
 
@@ -100,7 +205,7 @@ async function handleSetup<E extends BaseEnv>(
 
   return Response.json({
     ...(result ?? { installation_state: {} }),
-    ...(opts?.capabilities ? { capabilities: opts.capabilities } : {}),
+    ...capabilities,
   })
 }
 
@@ -170,8 +275,15 @@ async function handleHealth<E extends BaseEnv>(
   return Response.json(base)
 }
 
-export function createBagdockWorker<E extends BaseEnv>(
+/**
+ * The fetch handler every factory serves: lifecycle, health, then the route
+ * table through `dispatchRoute`. `capabilities`, when given, are reported in
+ * the `__platform/setup` response. `createCommsWorker` and
+ * `createPaymentsWorker` predate this and carry their own copy.
+ */
+export function buildWorker<E extends BaseEnv>(
   config: BagdockWorkerConfig<E>,
+  opts: SetupOptions & { logTag: string },
 ): ExportedHandler<E> {
   return {
     async fetch(request: Request, env: E): Promise<Response> {
@@ -181,12 +293,12 @@ export function createBagdockWorker<E extends BaseEnv>(
 
       try {
         if (path === '__platform/setup' && request.method === 'POST') {
-          const body = await parseJsonBody<{
+          const body = await readLifecycleBody<{
             operator_id: string
             installation_id: string
             environment: string
             input_values?: Record<string, string>
-          }>(request)
+          }>(request, env, '__platform/setup')
           if (body instanceof Response) return body
           const ctx = createContext(request, env, {
             operatorId: body.operator_id,
@@ -198,14 +310,14 @@ export function createBagdockWorker<E extends BaseEnv>(
           })
           if (!ctx)
             return Response.json({ error: 'Missing context' }, { status: 400 })
-          return await handleSetup(ctx, config.onInstall)
+          return await handleSetup(ctx, config.onInstall, opts)
         }
 
         if (path === '__platform/teardown' && request.method === 'POST') {
-          const body = await parseJsonBody<{
+          const body = await readLifecycleBody<{
             operator_id: string
             installation_id: string
-          }>(request)
+          }>(request, env, '__platform/teardown')
           if (body instanceof Response) return body
           const ctx = createContext(request, env, {
             operatorId: body.operator_id,
@@ -230,30 +342,11 @@ export function createBagdockWorker<E extends BaseEnv>(
           )
         }
 
-        const ctx = createContext(request, env)
-        if (!ctx) {
-          return Response.json(
-            { error: 'Missing dispatch headers' },
-            { status: 400 },
-          )
-        }
-
-        if (isVerifiedRoute(route)) {
-          const clone = request.clone()
-          const rawBody = await request.text()
-
-          const result = await route.verify(clone, env, rawBody)
-          if (result !== true) return result
-
-          const verifiedCtx: HandlerContext<E> = { ...ctx, request: clone }
-          return await route.handler(verifiedCtx)
-        }
-
-        return await route(ctx)
+        return await dispatchRoute(route, request, env, path)
       } catch (err: unknown) {
         // Full error stays in logs only — vendor/library messages can carry
         // internal detail (account ids, endpoints) that must not reach callers.
-        console.error(`[worker-sdk] ${path} error:`, err)
+        console.error(`[${opts.logTag}] ${path} error:`, err)
         return Response.json(
           { error: 'Internal error', path },
           {
@@ -264,6 +357,12 @@ export function createBagdockWorker<E extends BaseEnv>(
       }
     },
   }
+}
+
+export function createBagdockWorker<E extends BaseEnv>(
+  config: BagdockWorkerConfig<E>,
+): ExportedHandler<E> {
+  return buildWorker(config, { logTag: 'worker-sdk' })
 }
 
 export { handleSetup, handleTeardown, handleHealth }

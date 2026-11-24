@@ -14,11 +14,10 @@ import type {
   BaseEnv,
   PaymentsCapability,
   PaymentsWorkerConfig,
-  HandlerContext,
   RouteEntry,
 } from './types'
 import { createContext } from './context'
-import { handleSetup, handleTeardown, handleHealth, parseJsonBody } from './create-worker'
+import { dispatchRoute, handleSetup, handleTeardown, handleHealth, readLifecycleBody } from './create-worker'
 
 /**
  * E first so callers can specify only the env type:
@@ -39,12 +38,12 @@ export function createPaymentsWorker<
 
       try {
         if (path === '__platform/setup' && request.method === 'POST') {
-          const body = await parseJsonBody<{
+          const body = await readLifecycleBody<{
             operator_id: string
             installation_id: string
             environment: string
             input_values?: Record<string, string>
-          }>(request)
+          }>(request, env, '__platform/setup')
           if (body instanceof Response) return body
           const ctx = createContext(request, env, {
             operatorId: body.operator_id,
@@ -62,10 +61,10 @@ export function createPaymentsWorker<
         }
 
         if (path === '__platform/teardown' && request.method === 'POST') {
-          const body = await parseJsonBody<{
+          const body = await readLifecycleBody<{
             operator_id: string
             installation_id: string
-          }>(request)
+          }>(request, env, '__platform/teardown')
           if (body instanceof Response) return body
           const ctx = createContext(request, env, {
             operatorId: body.operator_id,
@@ -98,26 +97,7 @@ export function createPaymentsWorker<
           )
         }
 
-        const ctx = createContext(request, env)
-        if (!ctx) {
-          return Response.json(
-            { error: 'Missing dispatch headers' },
-            { status: 400 },
-          )
-        }
-
-        if (typeof route === 'object' && 'handler' in route && 'verify' in route) {
-          const clone = request.clone()
-          const rawBody = await request.text()
-
-          const result = await route.verify(clone, env, rawBody)
-          if (result !== true) return result
-
-          const verifiedCtx: HandlerContext<E> = { ...ctx, request: clone }
-          return await route.handler(verifiedCtx)
-        }
-
-        return await (route as (ctx: HandlerContext<E>) => Promise<Response>)(ctx)
+        return await dispatchRoute(route, request, env, path)
       } catch (err: unknown) {
         // Full error stays in logs only — PSP errors can carry internal
         // detail (account ids, endpoints) that must not reach callers.

@@ -184,7 +184,8 @@ export type VerifyFunction<E extends BaseEnv = BaseEnv> = (
  *
  * **Return semantics on missing/invalid inputs:**
  * - `signature` is `null` → returns `Response.json({ error: 'Missing webhook signature' }, { status: 401 })`
- * - `timestamp` provided but unparseable or outside `toleranceMs` → 401 Response
+ * - `timestamp` missing (`undefined`, `null` or empty) → 401 Response, unless `requireTimestamp: false`
+ * - `timestamp` unparseable or outside `toleranceMs` → 401 Response
  * - Signature mismatch (constant-time) → 401 Response
  * - All checks pass → `true`
  *
@@ -198,6 +199,12 @@ export interface HmacSha256VerifyOptions {
   signingString: string
   toleranceMs?: number
   timestamp?: string | null
+  /**
+   * Defaults to `true`: a missing timestamp fails verification. Set `false`
+   * only for a vendor that does not sign a timestamp; a timestamp that is
+   * present is still checked against `toleranceMs`.
+   */
+  requireTimestamp?: boolean
 }
 
 /**
@@ -205,7 +212,8 @@ export interface HmacSha256VerifyOptions {
  *
  * **Return semantics on missing/invalid inputs:**
  * - `signature` is `null` → returns `Response.json({ error: 'Missing webhook signature' }, { status: 401 })`
- * - `timestamp` provided but unparseable or outside `toleranceMs` → 401 Response
+ * - `timestamp` missing (`undefined`, `null` or empty) → 401 Response, unless `requireTimestamp: false`
+ * - `timestamp` unparseable or outside `toleranceMs` → 401 Response
  * - Signature invalid or crypto failure → 401 Response (logged to console)
  * - All checks pass → `true`
  *
@@ -219,13 +227,30 @@ export interface Ed25519VerifyOptions {
   signingString: string
   toleranceMs?: number
   timestamp?: string | null
+  /**
+   * Defaults to `true`: a missing timestamp fails verification. Set `false`
+   * only for a vendor that does not sign a timestamp; a timestamp that is
+   * present is still checked against `toleranceMs`.
+   */
+  requireTimestamp?: boolean
 }
 
 // ---------------------------------------------------------------------------
 // Comms Capability Discriminant
 // ---------------------------------------------------------------------------
 
-export type CommsCapability = 'sms' | 'voice' | 'numbers'
+/**
+ * What a comms adapter supports. operator-api hides a control whose route the
+ * adapter does not declare. `messaging_profile`, `alphanumeric_sender` and
+ * `registration` added in 0.8.0 (BDOK-3142).
+ */
+export type CommsCapability =
+  | 'sms'
+  | 'voice'
+  | 'numbers'
+  | 'messaging_profile'
+  | 'alphanumeric_sender'
+  | 'registration'
 
 // ---------------------------------------------------------------------------
 // SMS Contract (aligned with operator-api comms/types.ts)
@@ -234,7 +259,17 @@ export type CommsCapability = 'sms' | 'voice' | 'numbers'
 export interface SendSMSParams {
   to: string
   body: string
+  /**
+   * The sender: an E.164 number, or an alphanumeric sender ID (letters,
+   * digits and spaces, at most 11 characters). operator-api passes it on
+   * every send; adapters keep no default sender.
+   */
   from?: string
+  /**
+   * Provider id of the messaging profile to send through. Required by Telnyx
+   * when `from` is an alphanumeric sender.
+   */
+  messagingProfileId?: string
   facilityId?: string
   mediaUrls?: string[]
 }
@@ -304,20 +339,101 @@ export interface NormalizedCallEvent {
 // Numbers Contract (aligned with operator-api comms/types.ts + voice-provider.ts)
 // ---------------------------------------------------------------------------
 
+export type NumberType = 'local' | 'mobile' | 'toll_free' | 'national'
+export type NumberFeature = 'sms' | 'mms' | 'voice'
+
+/** A price as the provider quotes it, in the currency's minor units. */
+export interface QuotedPrice {
+  amountMinor: number
+  /** ISO 4217, as quoted by the provider. Never converted. */
+  currency: string
+}
+
 export interface NumberSearchParams {
+  /** ISO 3166-1 alpha-2. */
   country: string
+  numberType?: NumberType
   areaCode?: string
-  type?: 'local' | 'toll_free' | 'mobile'
+  locality?: string
+  /** A US state or Canadian province. */
+  administrativeArea?: string
+  /** Every listed feature must be present on a result. */
+  features?: NumberFeature[]
+  /** Digits the number must contain. */
+  contains?: string
   limit?: number
 }
 
 export interface AvailableNumber {
   phoneNumber: string
-  type: 'local' | 'toll_free' | 'mobile'
-  region?: string
-  monthlyPricePence?: number
+  numberType: NumberType
+  country: string
+  locality?: string
+  administrativeArea?: string
+  features: NumberFeature[]
+  monthlyCost?: QuotedPrice
+  upfrontCost?: QuotedPrice
+  /** Names of what the provider needs before it sells this number. */
+  requirements: string[]
+  /** True when the adapter answered from a fixture because the provider's test environment has no such resource. */
+  simulated?: boolean
 }
 
+export interface OrderNumberParams {
+  /** One exact number from a search, E.164. */
+  phoneNumber: string
+  messagingProfileId?: string
+  voiceConnectionId?: string
+  /** A provider requirement group holding what `requirements` asked for. */
+  requirementGroupId?: string
+  /** A Bagdock id (`pnum_…`). Never personal data. */
+  customerReference: string
+}
+
+export type OrderStatus = 'pending' | 'active' | 'requirements_needed' | 'failed'
+
+export interface OrderNumberResult {
+  providerOrderId?: string
+  /** The provider's id for the number, once the order is complete. */
+  providerNumberId?: string
+  phoneNumber?: string
+  status: OrderStatus
+  statusReason?: string
+  simulated?: boolean
+}
+
+export interface OrderStatusParams {
+  providerOrderId: string
+}
+
+export interface ReleaseNumberParams {
+  providerNumberId: string
+}
+
+export interface ReleaseNumberResult {
+  success: boolean
+  /** True when the provider no longer held the number. */
+  alreadyReleased?: boolean
+  providerStatus?: string
+  simulated?: boolean
+}
+
+export interface AssignProfileParams {
+  providerNumberId: string
+  /** Null removes the number from its profile. */
+  messagingProfileId: string | null
+}
+
+export interface AssignProfileResult {
+  providerNumberId: string
+  messagingProfileId: string | null
+  simulated?: boolean
+}
+
+/**
+ * Deprecated in 0.8.0: orders the first search result. Use
+ * `numbers/search` then `numbers/order`. Kept for one release.
+ */
 export interface ProvisionNumberParams {
   country: string
   locality?: string
@@ -326,6 +442,7 @@ export interface ProvisionNumberParams {
   facilityId?: string
 }
 
+/** Deprecated in 0.8.0, with `ProvisionNumberParams`. */
 export interface ProvisionNumberResult {
   number: string
   type: 'local' | 'toll_free' | 'mobile'
@@ -334,8 +451,152 @@ export interface ProvisionNumberResult {
   providerNumberId: string
 }
 
-export interface ReleaseNumberResult {
-  success: boolean
+// ---------------------------------------------------------------------------
+// Messaging profile and alphanumeric sender (0.8.0, BDOK-3142)
+// ---------------------------------------------------------------------------
+
+export interface MessagingProfileParams {
+  /** Update this profile. Omitted: the installation's profile, created when absent. */
+  providerProfileId?: string
+  /** ISO 3166-1 alpha-2 countries the profile may text. */
+  allowedDestinations?: string[]
+  /** Where the provider sends inbound texts and delivery reports. Null clears it. */
+  webhookUrl?: string | null
+}
+
+export interface MessagingProfileResult {
+  providerProfileId: string
+  name: string
+  allowedDestinations: string[]
+  alphanumericSender: string | null
+}
+
+export interface AlphanumericSenderParams {
+  providerProfileId: string
+  /** Letters, digits and spaces. Null clears the sender. */
+  sender: string | null
+}
+
+// ---------------------------------------------------------------------------
+// US registration (0.8.0, BDOK-3142)
+// ---------------------------------------------------------------------------
+
+export type RegistrationKind = 'us_10dlc_brand' | 'us_10dlc_campaign' | 'us_10dlc_vetting'
+
+export type RegistrationStatus = 'submitted' | 'vetting' | 'approved' | 'rejected' | 'suspended'
+
+/** The business behind a US 10DLC brand. Business details only. */
+export interface BrandRegistrationInput {
+  entityType: 'PRIVATE_PROFIT' | 'PUBLIC_PROFIT' | 'NON_PROFIT' | 'GOVERNMENT' | 'SOLE_PROPRIETOR'
+  /** Trading name. */
+  displayName: string
+  /** Legal name. */
+  companyName?: string
+  ein?: string
+  phone?: string
+  street?: string
+  city?: string
+  /** Two-letter state code. */
+  state?: string
+  postalCode?: string
+  /** ISO 3166-1 alpha-2. */
+  country: string
+  email: string
+  website?: string
+  /** Industry. Storage operators register as `REAL_ESTATE`. */
+  vertical?: string
+}
+
+export interface CampaignRegistrationInput {
+  /** The provider's brand id. */
+  brandId: string
+  usecase: string
+  description: string
+  /** One to five sample messages. */
+  samples: string[]
+  messageFlow?: string
+  helpMessage?: string
+  optinMessage?: string
+  optoutMessage?: string
+  subscriberOptin?: boolean
+  subscriberOptout?: boolean
+  subscriberHelp?: boolean
+  embeddedLink?: boolean
+  numberPool?: boolean
+  ageGated?: boolean
+  directLending?: boolean
+  privacyPolicyLink?: string
+  termsAndConditionsLink?: string
+}
+
+/** Enhanced (third-party) vetting of a brand that scored low. */
+export interface VettingRegistrationInput {
+  brandId: string
+  /** Vetting provider, e.g. `AEGIS`. */
+  provider: string
+  vettingClass: string
+}
+
+export interface RegistrationSubmitParams {
+  kind: RegistrationKind
+  brand?: BrandRegistrationInput
+  campaign?: CampaignRegistrationInput
+  vetting?: VettingRegistrationInput
+  /** Where the provider sends status events. */
+  webhookUrl: string
+  /** A Bagdock id (`creg_…`). Never personal data. */
+  referenceId: string
+}
+
+export interface RegistrationStatusParams {
+  kind: RegistrationKind
+  providerRegistrationId: string
+}
+
+export interface RegistrationResult {
+  providerRegistrationId: string
+  status: RegistrationStatus
+  /** The provider's own status value, unchanged. */
+  providerStatus: string
+  statusReason?: string
+  /** Brands only: the provider's identity verdict, e.g. `UNVERIFIED`. */
+  identityStatus?: string
+  simulated?: boolean
+}
+
+export interface RegistrationAssignNumberParams {
+  /** E.164. */
+  phoneNumber: string
+  providerCampaignId: string
+}
+
+export interface RegistrationAssignNumberResult {
+  phoneNumber: string
+  providerCampaignId: string
+  status: 'pending' | 'assigned' | 'failed' | 'unassigning'
+  providerStatus: string
+  statusReason?: string
+  simulated?: boolean
+}
+
+export interface RegistrationUsecase {
+  usecase: string
+  monthlyCost?: QuotedPrice
+  upfrontCost?: QuotedPrice
+}
+
+/** A provider registration event, normalised. */
+export interface NormalizedRegistrationEvent {
+  kind: RegistrationKind
+  providerRegistrationId: string
+  providerBrandId?: string
+  providerEventType?: string
+  providerStatus?: string
+  /** Set only when the event alone decides the status. */
+  status?: RegistrationStatus
+  description?: string
+  /** True when the caller should read `registrations/status` for the current state. */
+  refresh: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -348,15 +609,33 @@ export interface AllCommsRoutes<E extends BaseEnv = BaseEnv> {
   'voice/call': RouteHandler<E>
   'voice/status': RouteHandler<E>
   'numbers/search': RouteHandler<E>
+  'numbers/order': RouteHandler<E>
+  'numbers/order-status': RouteHandler<E>
+  /** Deprecated in 0.8.0; use `numbers/order`. */
   'numbers/provision': RouteHandler<E>
   'numbers/release': RouteHandler<E>
+  'numbers/assign-profile': RouteHandler<E>
+  'messaging/profile': RouteHandler<E>
+  'senders/alphanumeric': RouteHandler<E>
+  'registrations/submit': RouteHandler<E>
+  'registrations/status': RouteHandler<E>
+  'registrations/assign-number': RouteHandler<E>
+  'registrations/usecases': RouteHandler<E>
   'webhooks/sms': RouteEntry<E>
   'webhooks/voice': RouteEntry<E>
+  'webhooks/registration': RouteEntry<E>
 }
 
 type SmsRequired = 'sms/send'
 type VoiceRequired = 'voice/call'
-type NumbersRequired = 'numbers/search' | 'numbers/provision'
+type NumbersRequired = 'numbers/search' | 'numbers/order' | 'numbers/release'
+type MessagingProfileRequired = 'messaging/profile'
+type AlphanumericSenderRequired = 'senders/alphanumeric'
+type RegistrationRequired =
+  | 'registrations/submit'
+  | 'registrations/status'
+  | 'registrations/assign-number'
+  | 'webhooks/registration'
 
 export type CommsRouteMap<
   E extends BaseEnv,
@@ -369,6 +648,15 @@ export type CommsRouteMap<
     : {}) &
   ('numbers' extends C[number]
     ? Pick<AllCommsRoutes<E>, NumbersRequired>
+    : {}) &
+  ('messaging_profile' extends C[number]
+    ? Pick<AllCommsRoutes<E>, MessagingProfileRequired>
+    : {}) &
+  ('alphanumeric_sender' extends C[number]
+    ? Pick<AllCommsRoutes<E>, AlphanumericSenderRequired>
+    : {}) &
+  ('registration' extends C[number]
+    ? Pick<AllCommsRoutes<E>, RegistrationRequired>
     : {}) &
   Partial<AllCommsRoutes<E>>
 
@@ -453,6 +741,101 @@ export type PaymentsRouteMap<
   Partial<AllPaymentsRoutes<E>>
 
 // ---------------------------------------------------------------------------
+// Search Capability Discriminant
+// ---------------------------------------------------------------------------
+
+export type SearchCapability = 'web_search'
+
+// ---------------------------------------------------------------------------
+// Search Contract
+//
+// One platform route, `POST /search`. The platform calls it; a search worker
+// never calls the platform back, so it holds no scope and no callback
+// credential. The contract names no provider: a worker maps these fields onto
+// its provider's search call, and the platform cannot tell which one answered.
+// ---------------------------------------------------------------------------
+
+/** Longest `query`, in characters after trimming. */
+export const SEARCH_QUERY_MAX_LENGTH = 400
+
+/** Largest `limit`. */
+export const SEARCH_RESULT_LIMIT_MAX = 10
+
+export interface SearchRequest {
+  /** Place names and the kind of event sought. Nothing about a tenant. */
+  query: string
+  /** Earliest publication date wanted, `YYYY-MM-DD`. */
+  since: string
+  /** Most results wanted, 1 to `SEARCH_RESULT_LIMIT_MAX`. */
+  limit: number
+}
+
+export interface SearchResult {
+  /** The page title. Empty when the provider returns none. */
+  title: string
+  /** An absolute http(s) URL. A result without one is never returned. */
+  url: string
+  /** Publication date, `YYYY-MM-DD` in UTC. Null when the provider returns no date. */
+  published_at: string | null
+  /** The text the provider matched on the page. A result without one is never returned. */
+  passage: string
+}
+
+export interface SearchResponse {
+  results: SearchResult[]
+}
+
+/**
+ * What a search handler hands back before the factory normalises it: fields a
+ * provider may leave out, and the provider's own date string, as an ISO 8601
+ * date or date-time or as a dated string that states its zone (RFC 1123).
+ */
+export interface SearchHit {
+  title?: string | null
+  url?: string | null
+  published_at?: string | null
+  passage?: string | null
+}
+
+export type SearchErrorCode =
+  | 'invalid_query'
+  | 'provider_key_rejected'
+  | 'provider_rate_limited'
+  | 'provider_unavailable'
+
+export interface SearchErrorBody {
+  error: {
+    type: 'invalid_request_error' | 'authentication_error' | 'rate_limit_error' | 'api_error'
+    code: SearchErrorCode
+    message: string
+    param?: keyof SearchRequest
+  }
+}
+
+/**
+ * A search route handler. It receives the validated request and returns the
+ * provider's hits; the factory owns the wire shape. It throws
+ * `SearchProviderError` for a refused key or a reached limit, and anything
+ * else it throws is reported as `provider_unavailable`.
+ */
+export type SearchHandler<E extends BaseEnv = BaseEnv> = (
+  ctx: HandlerContext<E>,
+  request: SearchRequest,
+) => Promise<SearchHit[]>
+
+// ---------------------------------------------------------------------------
+// Search Route Map
+//
+// One capability and one route, so the map is not capabilities-driven as the
+// comms and payments maps are. A second capability brings its routes and the
+// conditional map with it.
+// ---------------------------------------------------------------------------
+
+export interface SearchRouteMap<E extends BaseEnv = BaseEnv> {
+  search: SearchHandler<E>
+}
+
+// ---------------------------------------------------------------------------
 // Worker Config
 // ---------------------------------------------------------------------------
 
@@ -486,4 +869,13 @@ export interface PaymentsWorkerConfig<
   onUninstall?: (ctx: HandlerContext<E>) => Promise<TeardownResult | void>
   healthCheck?: HealthCheckFn<E>
   routes: PaymentsRouteMap<E, C>
+}
+
+export interface SearchWorkerConfig<E extends BaseEnv = BaseEnv> {
+  version?: string
+  capabilities: readonly SearchCapability[]
+  onInstall?: (ctx: HandlerContext<E>) => Promise<InstallResult | void>
+  onUninstall?: (ctx: HandlerContext<E>) => Promise<TeardownResult | void>
+  healthCheck?: HealthCheckFn<E>
+  routes: SearchRouteMap<E>
 }

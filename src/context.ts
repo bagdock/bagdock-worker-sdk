@@ -9,6 +9,7 @@ import type {
   Logger,
 } from './types'
 import { createCredentialsProvider } from './credentials'
+import { redactForLog } from './redact'
 
 const DISPATCH_HEADERS = {
   operatorId: 'x-bagdock-operator-id',
@@ -41,6 +42,9 @@ function parseInstallInputsHeader(request: Request): Record<string, string> {
     return {}
   }
 }
+
+/** Id carried by the context of a webhook that arrived without dispatch headers. */
+export const ACCOUNT_LEVEL_ID = 'account'
 
 export function parseDispatchHeaders(request: Request): {
   operatorId: string
@@ -95,9 +99,9 @@ function createLogger(
 ): Logger {
   const prefix = `[${operatorId}/${installationId}]`
   return {
-    info: (msg, data) => console.log(prefix, msg, data ?? ''),
-    warn: (msg, data) => console.warn(prefix, msg, data ?? ''),
-    error: (msg, data) => console.error(prefix, msg, data ?? ''),
+    info: (msg, data) => console.log(prefix, msg, data ? redactForLog(data) : ''),
+    warn: (msg, data) => console.warn(prefix, msg, data ? redactForLog(data) : ''),
+    error: (msg, data) => console.error(prefix, msg, data ? redactForLog(data) : ''),
   }
 }
 
@@ -111,19 +115,34 @@ export function createContext<E extends BaseEnv>(
     /** Lifecycle routes supply inputs from the request body (the dispatch
      *  header is absent on `__platform/setup`); dispatch routes read the header. */
     inputs?: Record<string, string>
+    /** Vendor webhooks carry no dispatch headers. When set and the headers are
+     *  absent, the context is account-level: sentinel ids, `live`, and a store
+     *  that holds nothing (BDOK-568). */
+    accountLevel?: boolean
   },
 ): HandlerContext<E> | null {
   const headers = parseDispatchHeaders(request)
-  const operatorId = overrides?.operatorId ?? headers?.operatorId
-  const installationId =
-    overrides?.installationId ?? headers?.installationId
-  const environment = overrides?.environment ?? headers?.environment
+  let operatorId = overrides?.operatorId ?? headers?.operatorId
+  let installationId = overrides?.installationId ?? headers?.installationId
+  let environment = overrides?.environment ?? headers?.environment
+
+  let accountLevel = false
+  if (
+    overrides?.accountLevel &&
+    (!operatorId || !installationId || !environment)
+  ) {
+    operatorId = ACCOUNT_LEVEL_ID
+    installationId = ACCOUNT_LEVEL_ID
+    environment = 'live'
+    accountLevel = true
+  }
 
   if (!operatorId || !installationId || !environment) return null
 
-  const store: InstallStore = env.OPERATOR_CONFIG
-    ? new KvInstallStore(env.OPERATOR_CONFIG as KVNamespace, installationId)
-    : new NoOpInstallStore()
+  const store: InstallStore =
+    env.OPERATOR_CONFIG && !accountLevel
+      ? new KvInstallStore(env.OPERATOR_CONFIG as KVNamespace, installationId)
+      : new NoOpInstallStore()
 
   return {
     operatorId,

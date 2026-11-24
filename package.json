@@ -1,6 +1,6 @@
 {
   "name": "@bagdock/worker-sdk",
-  "version": "0.4.0",
+  "version": "0.8.0",
   "description": "SDK for building Bagdock platform workers — lifecycle hooks, typed comms contract, webhook verification",
   "type": "module",
   "main": "src/index.ts",
@@ -29,7 +29,8 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240909.0",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
   },
   "keywords": [
     "bagdock",

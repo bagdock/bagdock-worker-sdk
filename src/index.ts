@@ -8,6 +8,8 @@
 export { createBagdockWorker } from './create-worker'
 export { createCommsWorker } from './create-comms-worker'
 export { createPaymentsWorker } from './create-payments-worker'
+export { createSearchWorker, SearchProviderError } from './create-search-worker'
+export { SEARCH_QUERY_MAX_LENGTH, SEARCH_RESULT_LIMIT_MAX } from './types'
 export { createContext, KvInstallStore, parseDispatchHeaders } from './context'
 export { hmacSha256Verify, ed25519Verify } from './verify'
 export { createCredentialsProvider, isPreparedCredential } from './credentials'
@@ -34,9 +36,19 @@ export type {
   PaymentsCapability,
   PaymentsRouteMap,
   AllPaymentsRoutes,
+  SearchCapability,
+  SearchRouteMap,
   BagdockWorkerConfig,
   CommsWorkerConfig,
   PaymentsWorkerConfig,
+  SearchWorkerConfig,
+  SearchHandler,
+  SearchRequest,
+  SearchHit,
+  SearchResult,
+  SearchResponse,
+  SearchErrorCode,
+  SearchErrorBody,
   SendSMSParams,
   SendSMSResult,
   CreateCallParams,
@@ -46,9 +58,34 @@ export type {
   NormalizedCallEvent,
   NumberSearchParams,
   AvailableNumber,
+  NumberType,
+  NumberFeature,
+  QuotedPrice,
+  OrderNumberParams,
+  OrderNumberResult,
+  OrderStatus,
+  OrderStatusParams,
   ProvisionNumberParams,
   ProvisionNumberResult,
+  ReleaseNumberParams,
   ReleaseNumberResult,
+  AssignProfileParams,
+  AssignProfileResult,
+  MessagingProfileParams,
+  MessagingProfileResult,
+  AlphanumericSenderParams,
+  RegistrationKind,
+  RegistrationStatus,
+  BrandRegistrationInput,
+  CampaignRegistrationInput,
+  VettingRegistrationInput,
+  RegistrationSubmitParams,
+  RegistrationStatusParams,
+  RegistrationResult,
+  RegistrationAssignNumberParams,
+  RegistrationAssignNumberResult,
+  RegistrationUsecase,
+  NormalizedRegistrationEvent,
 } from './types'
 
 export type {
