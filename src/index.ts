@@ -13,6 +13,9 @@ export { SEARCH_QUERY_MAX_LENGTH, SEARCH_RESULT_LIMIT_MAX } from './types'
 export { createContext, KvInstallStore, parseDispatchHeaders } from './context'
 export { hmacSha256Verify, ed25519Verify } from './verify'
 export { createCredentialsProvider, isPreparedCredential } from './credentials'
+export { pickFields, createReplayGuard } from './controls'
+export type { ReplayStore, ReplayGuard, ReplayGuardOptions } from './controls'
+export { bagdockEventsRoute, tickRoute, installationWebhookRoute } from './channels'
 
 export type {
   BaseEnv,
@@ -27,6 +30,12 @@ export type {
   RouteHandler,
   RouteEntry,
   VerifiedRouteConfig,
+  InstallationWebhookRouteConfig,
+  InstallationWebhookContext,
+  BagdockEventDelivery,
+  BagdockEventHandler,
+  TickDelivery,
+  TickHandler,
   VerifyFunction,
   HmacSha256VerifyOptions,
   Ed25519VerifyOptions,

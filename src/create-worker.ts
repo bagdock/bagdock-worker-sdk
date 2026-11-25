@@ -11,6 +11,7 @@ import type {
   BagdockWorkerConfig,
   HandlerContext,
   HealthResponse,
+  InstallationWebhookRouteConfig,
   RouteEntry,
   VerifiedRouteConfig,
 } from './types'
@@ -32,10 +33,17 @@ let healthCache: { result: { status: 'healthy' | 'degraded' | 'down'; reason?: s
 let healthInflight: Promise<{ status: 'healthy' | 'degraded' | 'down'; reason?: string }> | null = null
 const HEALTH_CACHE_TTL_MS = 15_000
 
+function isInstallationWebhookRoute<E extends BaseEnv>(
+  entry: RouteEntry<E>,
+): entry is InstallationWebhookRouteConfig<E> {
+  return typeof entry === 'object' && (entry as { kind?: unknown }).kind === 'installation_webhook'
+}
+
 function isVerifiedRoute<E extends BaseEnv>(
   entry: RouteEntry<E>,
 ): entry is VerifiedRouteConfig<E> {
-  return typeof entry === 'object' && 'handler' in entry && 'verify' in entry
+  return typeof entry === 'object' && !isInstallationWebhookRoute(entry) &&
+    'handler' in entry && 'verify' in entry
 }
 
 /**
@@ -108,6 +116,31 @@ export async function dispatchRoute<E extends BaseEnv>(
   env: E,
   path: string,
 ): Promise<Response> {
+  // A vendor webhook forwarded by the platform's per-installation URL
+  // (BDOK-3195). The platform's signature comes first: it is what makes the
+  // dispatch headers, and so the install inputs the vendor check uses,
+  // attributable to the platform. A direct vendor delivery has no signature
+  // and is refused.
+  if (isInstallationWebhookRoute(route)) {
+    const clone = request.clone()
+    const rawBody = await authenticatePlatformCall(request, env, path)
+    if (rawBody instanceof Response) return rawBody
+
+    const ctx = createContext(clone, env)
+    if (!ctx) {
+      return Response.json(
+        { error: 'Missing dispatch headers' },
+        { status: 400 },
+      )
+    }
+    const webhookCtx = { ...ctx, request: clone, rawBody }
+    if (route.verify) {
+      const verified = await route.verify(webhookCtx)
+      if (verified !== true) return verified
+    }
+    return await route.handler(webhookCtx)
+  }
+
   if (isVerifiedRoute(route)) {
     const clone = request.clone()
     const rawBody = await request.text()

@@ -1,5 +1,21 @@
 # @bagdock/worker-sdk
 
+## Unreleased
+
+### Minor Changes
+
+- `pickFields(source, fields)` builds an outbound payload from an explicit field allowlist (keys or dotted paths), and `createReplayGuard({ store })` refuses a webhook delivery id it has already seen (`firstSeen`, `forget`). Both serve the app security gate's required controls (BDOK-3216). New types: `ReplayStore`, `ReplayGuard` and `ReplayGuardOptions`.
+
+## 0.9.0
+
+### Minor Changes
+
+- Installed apps receive three platform calls with their installation's context (BDOK-3195). Each is signed with the worker's platform key and carries the dispatch headers and install inputs.
+- `bagdockEventsRoute(handlers)` serves the route the platform delivers the manifest's declared `events` to. The body is `BagdockEventDelivery` (`event_id`, `event_type`, `occurred_at`, `data`), dispatched to the handler for its type. A type with no handler answers 200 with `handled: false`; a handler that throws answers 500 and the platform retries.
+- `tickRoute(handler)` serves the route the platform calls on the manifest's `tick` interval. The body is `TickDelivery` (`object: 'tick'`, `id`, `scheduled_at`, `interval_seconds`).
+- `installationWebhookRoute({ verify, handler })` builds a route kind for vendor webhooks that arrive through the platform's per-installation URL, `/webhooks/apps/{installation_id}/{path}`. The route requires the platform's signature, then builds the context from the dispatch headers, so `verify` checks the vendor's signature over `ctx.rawBody` with the installation's own secret in `ctx.inputs`. A delivery sent straight to the worker is refused with 401. A forwarded GET runs the same route, with the vendor's query string on `ctx.request.url`.
+- New types: `BagdockEventDelivery`, `BagdockEventHandler`, `TickDelivery`, `TickHandler`, `InstallationWebhookRouteConfig` and `InstallationWebhookContext`. `RouteEntry` adds `InstallationWebhookRouteConfig`.
+
 ## 0.8.0
 
 ### Minor Changes

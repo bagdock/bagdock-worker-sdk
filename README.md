@@ -215,6 +215,52 @@ What the factory does with the hits:
 - At most `limit` results are returned.
 - Anything else the handler throws is reported as `provider_unavailable`. The thrown message goes to the worker's logs and never into the response.
 
+## Installation channels
+
+An installed app can receive three kinds of call from the platform, each with the installation's context: dispatch headers, `ctx.inputs` and the install store. Each call is signed with the worker's platform key, so the route refuses an unsigned one with 401.
+
+| Channel | Manifest | Route builder |
+|---------|----------|---------------|
+| Bagdock events | `events`, `eventsRoute` (default `/bagdock/events`) | `bagdockEventsRoute(handlers)` |
+| Scheduled tick | `tick: { intervalSeconds, route }` (whole minutes from 60, default route `/bagdock/tick`) | `tickRoute(handler)` |
+| Vendor webhooks | `webhooks[].path` | `installationWebhookRoute({ verify, handler })` |
+
+```typescript
+import {
+  createBagdockWorker,
+  bagdockEventsRoute,
+  tickRoute,
+  installationWebhookRoute,
+  hmacSha256Verify,
+} from '@bagdock/worker-sdk'
+
+export default createBagdockWorker({
+  routes: {
+    'bagdock/events': bagdockEventsRoute({
+      'valet_order.confirmed': async (event, ctx) => {
+        // event.event_id is the same on every retry; deduplicate on it.
+      },
+    }),
+    'bagdock/tick': tickRoute(async (tick, ctx) => {
+      // Runs every tick.interval_seconds for each active installation.
+    }),
+    'webhooks/vendor': installationWebhookRoute({
+      verify: (ctx) => hmacSha256Verify({
+        secret: ctx.inputs.webhook_secret,
+        signingString: ctx.rawBody,
+        signature: ctx.request.headers.get('x-vendor-signature'),
+        requireTimestamp: false,
+      }),
+      handler: async (ctx) => Response.json({ received: true }),
+    }),
+  },
+})
+```
+
+Events arrive as operator webhook endpoints receive them: `{ event_id, event_type, occurred_at, data }`. A handler that throws answers 500, and the platform retries up to five times. A type with no handler answers 200 and is not retried.
+
+A vendor gives the installation's URL, `https://api.bagdock.com/webhooks/apps/{installation_id}/{path}`, in place of the worker's own. The platform forwards the vendor's headers, body and query string, so `verify` checks the vendor's signature over `ctx.rawBody` with the installation's own secret. A GET is forwarded too, for vendors that validate an endpoint with one. A delivery sent straight to the worker carries no platform signature and is refused.
+
 ## Webhook verification
 
 The SDK is **vendor-agnostic** — it knows nothing about Telnyx, Stripe, Shopify, or any other vendor. Webhook verification follows the same pattern every major platform uses: the vendor who signs the webhook publishes the SDK that verifies it.
@@ -275,6 +321,14 @@ Both `hmacSha256Verify` and `ed25519Verify` handle null signatures, timestamp sk
 | `createCommsWorker(config)` | Comms factory — extends base with capabilities-driven typed route enforcement |
 | `createSearchWorker(config)` | Search factory: serves `POST /search` and owns its request checks, response shape and error codes |
 
+### Route builders
+
+| Export | Description |
+|--------|-------------|
+| `bagdockEventsRoute(handlers)` | The route the platform delivers declared Bagdock events to, one handler per event type |
+| `tickRoute(handler)` | The route the platform calls on the manifest's tick interval |
+| `installationWebhookRoute({ verify, handler })` | A vendor webhook forwarded by the per-installation URL, with the installation's context |
+
 ### Verification primitives
 
 | Export | Description |
@@ -291,6 +345,9 @@ Both `hmacSha256Verify` and `ed25519Verify` handle null signatures, timestamp sk
 | `CommsCapability` | `'sms' \| 'voice' \| 'numbers' \| 'messaging_profile' \| 'alphanumeric_sender' \| 'registration'` |
 | `InstallStore` | Per-installation encrypted state bag (KV-backed) |
 | `RouteHandler<E>` | `(ctx: HandlerContext<E>) => Promise<Response>` |
+| `BagdockEventDelivery` / `BagdockEventHandler<E>` | A delivered Bagdock event and its handler |
+| `TickDelivery` / `TickHandler<E>` | A scheduled tick and its handler |
+| `InstallationWebhookRouteConfig<E>` / `InstallationWebhookContext<E>` | A forwarded vendor webhook route; its context adds `rawBody` |
 | `SendSMSParams` / `SendSMSResult` | SMS contract types |
 | `CreateCallParams` / `CallResult` | Voice contract types |
 | `NumberSearchParams` / `AvailableNumber` | Number search: filters, features, quoted prices and requirements |

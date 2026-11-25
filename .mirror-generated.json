@@ -3,7 +3,7 @@
   "package": "@bagdock/worker-sdk",
   "source": "github.com/bagdock/bagdock",
   "sourcePath": "packages/worker-sdk",
-  "sourceRef": "223cf06b9328a728ca97df02f4c86c774f17eeef",
-  "version": "0.8.0",
+  "sourceRef": "d2f1f4677c1d1314a1c842b3595091e98a28f2da",
+  "version": "0.9.0",
   "doNotEdit": "This repository is a generated one-way mirror. Edit the source in the monorepo."
 }

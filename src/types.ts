@@ -150,9 +150,77 @@ export interface VerifiedRouteConfig<E extends BaseEnv = BaseEnv> {
   verify: VerifyFunction<E>
 }
 
+/** The context of a vendor webhook forwarded by the platform: the dispatch
+ *  context plus the vendor's exact body, for the vendor's signature check. */
+export interface InstallationWebhookContext<E extends BaseEnv = BaseEnv> extends HandlerContext<E> {
+  rawBody: string
+}
+
+/**
+ * A vendor webhook that reaches the worker through the platform's
+ * per-installation URL, `/webhooks/apps/{installation_id}/{path}` on the
+ * operator API (BDOK-3195). The platform signs the forward and adds the
+ * installation's dispatch headers and install inputs, so the route runs with
+ * the installation's context and can check the vendor's signature with the
+ * installation's own secret (`ctx.inputs`). A direct, unsigned delivery is
+ * refused with 401.
+ *
+ * Declare the route's path in the manifest's `webhooks`; the platform forwards
+ * only to declared paths. GET is forwarded too, for vendors that validate an
+ * endpoint with one; the query string is on `ctx.request.url`.
+ */
+export interface InstallationWebhookRouteConfig<E extends BaseEnv = BaseEnv> {
+  kind: 'installation_webhook'
+  /** The vendor's signature check. Return `true` to accept, or the response to send. */
+  verify?: (ctx: InstallationWebhookContext<E>) => Promise<true | Response>
+  handler: (ctx: InstallationWebhookContext<E>) => Promise<Response>
+}
+
 export type RouteEntry<E extends BaseEnv = BaseEnv> =
   | RouteHandler<E>
   | VerifiedRouteConfig<E>
+  | InstallationWebhookRouteConfig<E>
+
+// ---------------------------------------------------------------------------
+// Installation channels: Bagdock events and the scheduled tick (BDOK-3195)
+// ---------------------------------------------------------------------------
+
+/**
+ * A Bagdock event, as operator webhook endpoints receive it. The platform
+ * sends each event the manifest's `events` declares to its `eventsRoute`.
+ * `event_id` is the same on every retry of one event, so a handler
+ * deduplicates on it.
+ */
+export interface BagdockEventDelivery<T = Record<string, unknown>> {
+  event_id: string
+  event_type: string
+  /** ISO 8601. */
+  occurred_at: string
+  data: T
+}
+
+/** Handles one event type. Return nothing for 200, or a response to send;
+ *  a throw answers 500 and the platform retries. */
+export type BagdockEventHandler<E extends BaseEnv = BaseEnv> = (
+  event: BagdockEventDelivery,
+  ctx: HandlerContext<E>,
+) => Promise<void | Response>
+
+/** The body of a scheduled tick. `id` is unique per installation and minute. */
+export interface TickDelivery {
+  object: 'tick'
+  id: string
+  /** ISO 8601, the start of the minute the tick was due. */
+  scheduled_at: string
+  interval_seconds: number
+}
+
+/** Runs on each tick. Ticks can overlap when a run is slower than the
+ *  interval, so a handler is idempotent. A tick is not retried. */
+export type TickHandler<E extends BaseEnv = BaseEnv> = (
+  tick: TickDelivery,
+  ctx: HandlerContext<E>,
+) => Promise<void | Response>
 
 // ---------------------------------------------------------------------------
 // Webhook Verification
